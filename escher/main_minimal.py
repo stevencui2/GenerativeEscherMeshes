@@ -108,6 +108,15 @@ for iter in range(800):
     #     w_solver_input = torch.tensor(results["w_solver_input"]).float()
     # get mapped vertices w.r.t w
     mapped, _, _ = solver.solve(w_solver_input)
+    if iter % 50 == 0 and iter > 0:  
+    distortion_score = compute_comprehensive_distortion(  
+        mapped.detach().numpy(),   
+        faces_npy,  
+        reference_vertices=initial_points  # Store initial mesh  
+    )  
+      
+    if distortion_score > 0.6:  
+        print(f"Distortion: {distortion_score:.3f} - Consider remeshing")
     mid_point = int(square_sides[0].shape[0] / 2)
     loss = torch.sum((mapped[square_sides[0][mid_point], :] - 40)) * 1000
     # loss += 0.02* torch.sum(W**2)
