@@ -520,14 +520,14 @@ class Escher:
                 # ======Solve linear solve ==========================================================
                 mapped, _, success = self.solver.solve(w_solver_input)
                 # Barycentric remesh check every 2 iterations
-                if iter % 2 == 0 and iter > 0:
+                if iter % 100 == 0 and iter > 0:
                     vertices_np = mapped.detach().cpu().numpy()
                     faces_np = self.faces.cpu().numpy()
 
                     # comprehensive distortion check
                     distortion_score = compute_comprehensive_distortion(vertices_np, faces_np,self.initial_vertices)
                     
-                    if distortion_score > 0.01:  
+                    if distortion_score > 0.4:  
                         print(f"High distortion detected: {distortion_score:.3f}, triggering barycentric remesh")  
 
                         # Complete barycentric remesh
@@ -536,35 +536,35 @@ class Escher:
                             )
 
 
-                    if "Hexagon" in self.args.TILING_TYPE:
-                        sides= None
-                        raise NotImplementedError("Hexagonal remeshing not implemented yet")
-                    else:
-                        # bdry indices of mesh
-                        # bdry = igl.boundary_loop(new_faces)
+                        if "Hexagon" in self.args.TILING_TYPE:
+                            sides= None
+                            raise NotImplementedError("Hexagonal remeshing not implemented yet")
+                        else:
+                            # bdry indices of mesh
+                            # bdry = igl.boundary_loop(new_faces)
 
-                        # split the bdry into 4 sides (left,right,top,down)
-                        # sides = split_square_boundary.split_square_boundary(new_vertices, bdry)
-                        sides=split_boundary_by_discrete_2d_curvature(new_vertices, new_faces)
+                            # split the bdry into 4 sides (left,right,top,down)
+                            # sides = split_square_boundary.split_square_boundary(new_vertices, bdry)
+                            sides=split_boundary_by_discrete_2d_curvature(new_vertices, new_faces)
 
 
-                        plot_sides(sides,new_vertices)
+                            # plot_sides(sides,new_vertices)
 
-                        # Update the solver with the new vertices and edge pairs
-                        #for now only consider one number of label, thus face_split= [new_faces]
-                        init_weights=False
-                        self.init_mesh_solver_parameters(
-                            new_vertices, new_faces, [new_faces] ,init_weights,sides
-                        )
-                        # Update the weight parameter for next iterations  
-                        W_tensor = torch.tensor(new_weights, dtype=torch.float32).reshape(-1, 1)
-                        self.W = torch.nn.Parameter(W_tensor)
+                            # Update the solver with the new vertices and edge pairs
+                            #for now only consider one number of label, thus face_split= [new_faces]
+                            init_weights=False
+                            self.init_mesh_solver_parameters(
+                                new_vertices, new_faces, [new_faces] ,init_weights,sides
+                            )
+                            # Update the weight parameter for next iterations  
+                            W_tensor = torch.tensor(new_weights, dtype=torch.float32).reshape(-1, 1)
+                            self.W = torch.nn.Parameter(W_tensor)
 
-                        
-                        print(f"Remesh completed: {len(new_vertices)} vertices, {len(new_faces)} faces")
+                            
+                            print(f"Remesh completed: {len(new_vertices)} vertices, {len(new_faces)} faces")
 
-                        #update the mapped vertices
-                        mapped = torch.from_numpy(new_vertices)
+                            #update the mapped vertices
+                            mapped = torch.from_numpy(new_vertices)
                 if not success:
                     # pickle everything i need to reproduce
                     os.makedirs(os.path.join(self.args.OUTPUT_DIR, "failure"), exist_ok=True)

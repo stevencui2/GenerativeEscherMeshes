@@ -409,7 +409,7 @@ def barycentric_remesh_optimization(vertices,faces,boundary_indices):
 
     # Step 5: Call triangle to triangulate the polygon
     # B = triangle.triangulate(A, f'pqa{median_area}D')  # 'p' = PSLG (respect segments)
-    B = triangle.triangulate(A, 'pqD')  # 'p' = PSLG (respect segments)
+    B = triangle.triangulate(A, 'pq')  # 'p' = PSLG (respect segments)
 
     # Extract vertices and faces
     new_vertices = B['vertices']
