@@ -1,10 +1,9 @@
 import igl
-# from scipy.spatial import Delaunay  
+import matplotlib.pyplot as plt
 from scipy.spatial.distance import pdist  
 import numpy as np  
 # import torch  
 import triangle 
-import numpy as np
 def compute_comprehensive_distortion(vertices, faces, reference_vertices=None):  
     """  
     Compute comprehensive mesh quality metrics for distortion detection  
@@ -80,28 +79,28 @@ def compute_comprehensive_distortion(vertices, faces, reference_vertices=None):
     bad_edge_ratios = np.mean((edge_ratios > 2.0) | (edge_ratios < 0.5))  
     distortion_score += bad_edge_ratios * 0.15  
       
-    # 5. Jacobian Determinant (requires reference vertices)  
-    if reference_vertices is not None:  
-        jacobian_dets = []  
-        for face in faces:  
-            current_tri = vertices[face]  
-            ref_tri = reference_vertices[face]  
+    # # 5. Jacobian Determinant (requires reference vertices)  
+    # if reference_vertices is not None:  
+    #     jacobian_dets = []  
+    #     for face in faces:  
+    #         current_tri = vertices[face]  
+    #         ref_tri = reference_vertices[face]  
               
-            # Compute edge vectors  
-            current_edges = current_tri[1:] - current_tri[0]  
-            ref_edges = ref_tri[1:] - ref_tri[0]  
+    #         # Compute edge vectors  
+    #         current_edges = current_tri[1:] - current_tri[0]  
+    #         ref_edges = ref_tri[1:] - ref_tri[0]  
               
-            # Compute Jacobian matrix (2x2 for 2D)  
-            try:  
-                J = np.linalg.solve(ref_edges.T, current_edges.T)  
-                det_J = np.linalg.det(J)  
-                jacobian_dets.append(abs(det_J))  
-            except np.linalg.LinAlgError:  
-                jacobian_dets.append(0.0)  # Degenerate case  
+    #         # Compute Jacobian matrix (2x2 for 2D)  
+    #         try:  
+    #             J = np.linalg.solve(ref_edges.T, current_edges.T)  
+    #             det_J = np.linalg.det(J)  
+    #             jacobian_dets.append(abs(det_J))  
+    #         except np.linalg.LinAlgError:  
+    #             jacobian_dets.append(0.0)  # Degenerate case  
           
-        jacobian_dets = np.array(jacobian_dets)  
-        bad_jacobians = np.mean((jacobian_dets < 0.1) | (jacobian_dets > 5.0))  
-        distortion_score += bad_jacobians * 0.2  
+    #     jacobian_dets = np.array(jacobian_dets)  
+    #     bad_jacobians = np.mean((jacobian_dets < 0.1) | (jacobian_dets > 5.0))  
+    #     distortion_score += bad_jacobians * 0.2  
       
     # 6. Gaussian Curvature Variation  
     curvatures = []  
@@ -397,23 +396,22 @@ def barycentric_remesh_optimization(vertices,faces,boundary_indices):
     mean_area, median_area, min_area, max_area = compute_average_area(vertices, faces)
     print(f"Triangle area - Mean: {mean_area}, Median: {median_area}, Min: {min_area}, Max: {max_area}")  
     
-    # Detect boundary vertices from constraint system  
-    boundary_vertices = vertices[boundary_indices]  # shape (n, 2)
-    segments = [[i, (i + 1) % len(boundary_indices)] for i in range(len(boundary_indices))]
+    # Convert to boundary segments (pairs of vertex indices)
+    segments = np.column_stack([boundary_indices, np.roll(boundary_indices, -1)])
 
     # Step 4: Build triangle input
     A = {
-        'vertices': boundary_vertices,
+        'vertices': vertices,
         'segments': segments,
     }
 
     # Step 5: Call triangle to triangulate the polygon
-    # B = triangle.triangulate(A, f'pqa{median_area}D')  # 'p' = PSLG (respect segments)
-    B = triangle.triangulate(A, 'pq')  # 'p' = PSLG (respect segments)
-
+    B = triangle.triangulate(A, f'pqYa{max_area}')  # 'p' = PSLG (respect segments)
     # Extract vertices and faces
     new_vertices = B['vertices']
     new_faces = B['triangles']
+    # triangle.compare(plt, A, B)
+    # plt.show()
 
     L = igl.cotmatrix(new_vertices, new_faces)
 

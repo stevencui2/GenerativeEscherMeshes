@@ -527,7 +527,7 @@ class Escher:
                     # comprehensive distortion check
                     distortion_score = compute_comprehensive_distortion(vertices_np, faces_np,self.initial_vertices)
                     
-                    if distortion_score > 0.4:  
+                    if distortion_score > 0.1:  
                         print(f"High distortion detected: {distortion_score:.3f}, triggering barycentric remesh")  
 
                         # Complete barycentric remesh
