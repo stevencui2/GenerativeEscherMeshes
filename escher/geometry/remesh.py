@@ -4,6 +4,7 @@ from scipy.spatial.distance import pdist
 import numpy as np  
 # import torch  
 import triangle 
+from escher.geometry.sanity_checks import check_triangle_orientation
 def compute_comprehensive_distortion(vertices, faces, reference_vertices=None):  
     """  
     Compute comprehensive mesh quality metrics for distortion detection  
@@ -286,23 +287,23 @@ def split_boundary_by_discrete_2d_curvature(V, F):
     loop = V[boundary]
 
     # Step 2: Compute turning angles (discrete curvature)
-    prev = np.roll(loop, 1, axis=0)
-    next = np.roll(loop, -1, axis=0)
-    v1 = loop - prev
-    v2 = next - loop
+    # prev = np.roll(loop, 1, axis=0)
+    # next = np.roll(loop, -1, axis=0)
+    # v1 = loop - prev
+    # v2 = next - loop
 
-    # Normalize edge vectors
-    v1 /= np.linalg.norm(v1, axis=1, keepdims=True)
-    v2 /= np.linalg.norm(v2, axis=1, keepdims=True)
+    # # Normalize edge vectors
+    # v1 /= np.linalg.norm(v1, axis=1, keepdims=True)
+    # v2 /= np.linalg.norm(v2, axis=1, keepdims=True)
 
-    # Compute angle between edges
-    dot = np.einsum('ij,ij->i', v1, v2)
-    dot = np.clip(dot, -1.0, 1.0)
-    angles = np.arccos(dot)  # Radians, max ~ π
+    # # Compute angle between edges
+    # dot = np.einsum('ij,ij->i', v1, v2)
+    # dot = np.clip(dot, -1.0, 1.0)
+    # angles = np.arccos(dot)  # Radians, max ~ π
 
-    # Sharpest 4 turning points
-    corner_idx = np.argsort(-angles)[:4]
-    corner_idx = np.sort(corner_idx)
+    # # Sharpest 4 turning points
+    # corner_idx = np.argsort(-angles)[:4]
+    #corner_idx = np.sort(corner_idx)
 
     # wrapped = list(corner_idx) + [corner_idx[0] + len(loop)]
     wrapped=[0,49,98,147,196]  # Assuming these are the indices of the corners in the boundary loop
@@ -373,7 +374,7 @@ def compute_average_area(V, F):
         v0, v1, v2 = V[tri]
         area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0))
         areas.append(area)
-    return np.mean(areas), np.median(areas), np.min(areas), np.max(areas)
+    return np.max(areas)
 
 def barycentric_remesh_optimization(vertices,faces,boundary_indices):  
     """  
@@ -393,8 +394,8 @@ def barycentric_remesh_optimization(vertices,faces,boundary_indices):
         new_constraint_data: Rebuilt constraint system  
     """  
     #get triangle areas
-    mean_area, median_area, min_area, max_area = compute_average_area(vertices, faces)
-    print(f"Triangle area - Mean: {mean_area}, Median: {median_area}, Min: {min_area}, Max: {max_area}")  
+    max_area = compute_average_area(vertices, faces)
+    print(f"Triangle area - Max: {max_area}")  
     
     # Convert to boundary segments (pairs of vertex indices)
     segments = np.column_stack([boundary_indices, np.roll(boundary_indices, -1)])
@@ -406,12 +407,15 @@ def barycentric_remesh_optimization(vertices,faces,boundary_indices):
     }
 
     # Step 5: Call triangle to triangulate the polygon
-    B = triangle.triangulate(A, f'pqYa{max_area}')  # 'p' = PSLG (respect segments)
+    # B = triangle.triangulate(A, f'pqY')  # 'p' = PSLG (respect segments)
+    B = triangle.triangulate(A, f'p')  # 'p' = PSLG (respect segments)
     # Extract vertices and faces
     new_vertices = B['vertices']
     new_faces = B['triangles']
     # triangle.compare(plt, A, B)
     # plt.show()
+
+    # check_triangle_orientation(new_vertices, new_faces)
 
     L = igl.cotmatrix(new_vertices, new_faces)
 

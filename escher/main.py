@@ -363,7 +363,7 @@ class Escher:
         self.init_mesh_solver_parameters(points, faces_npy, faces_split, init_weight, sides)
 
 
-    def init_optimizer(self):
+    def init_optimizer(self,remaining_steps=None):
         # ================== Init Texture ===========================
         texture = None
         self.num_channels = 3
@@ -398,7 +398,7 @@ class Escher:
                 ],
                 lr=self.args.LR,
             )
-            self.init_scheduler()
+            self.init_scheduler(remaining_steps)
 
     def init_scheduler(self, remaining_steps=None):
         if remaining_steps is None:
@@ -557,14 +557,16 @@ class Escher:
                                 new_vertices, new_faces, [new_faces] ,init_weights,sides
                             )
                             # Update the weight parameter for next iterations  
-                            W_tensor = torch.tensor(new_weights, dtype=torch.float32).reshape(-1, 1)
+                            W_tensor = torch.tensor(new_weights, dtype=torch.float32).unsqueeze(1)
                             self.W = torch.nn.Parameter(W_tensor)
+                            self.init_optimizer(remaining_steps=self.args.N_STEPS - iter)
 
                             
                             print(f"Remesh completed: {len(new_vertices)} vertices, {len(new_faces)} faces")
 
                             #update the mapped vertices
                             mapped = torch.from_numpy(new_vertices)
+                            
                 if not success:
                     # pickle everything i need to reproduce
                     os.makedirs(os.path.join(self.args.OUTPUT_DIR, "failure"), exist_ok=True)
