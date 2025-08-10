@@ -5,6 +5,7 @@ import numpy as np
 # import torch  
 import triangle 
 from escher.geometry.sanity_checks import check_triangle_orientation
+import gpytoolbox
 def compute_comprehensive_distortion(vertices, faces, reference_vertices=None):  
     """  
     Compute comprehensive mesh quality metrics for distortion detection  
@@ -357,6 +358,27 @@ def split_boundary_by_discrete_2d_curvature(V, F):
     return sides_dict
 
 
+import numpy as np
+
+def get_max_edge_length(V, F):
+    # Extract the vertex coordinates of each triangle
+    v0 = V[F[:, 0]]
+    v1 = V[F[:, 1]]
+    v2 = V[F[:, 2]]
+    
+    # Compute lengths of all edges
+    e0 = np.linalg.norm(v1 - v0, axis=1)
+    e1 = np.linalg.norm(v2 - v1, axis=1)
+    e2 = np.linalg.norm(v0 - v2, axis=1)
+    
+    # Return the maximum
+    return np.max([e0.max(), e1.max(), e2.max()])
+
+# # Example
+# V = np.array([[0, 0], [1, 0], [0, 1]])
+# F = np.array([[0, 1, 2]])
+# print(max_edge_length(V, F))  # 1.414...
+
 
 def plot_sides(sides,vertices):
     import matplotlib.pyplot as plt
@@ -376,8 +398,72 @@ def compute_average_area(V, F):
         areas.append(area)
     return np.max(areas)
 
-def barycentric_remesh_optimization(vertices,faces,boundary_indices):  
-    """  
+
+import numpy as np
+
+def triangle_orientation_2d(V, F):
+    v0 = V[F[:, 0]]
+    v1 = V[F[:, 1]]
+    v2 = V[F[:, 2]]
+
+    # Signed area * 2
+    signed_area2 = (v1[:, 0] - v0[:, 0]) * (v2[:, 1] - v0[:, 1]) - \
+                   (v2[:, 0] - v0[:, 0]) * (v1[:, 1] - v0[:, 1])
+
+    return np.sign(signed_area2)  # +1 CCW, -1 CW, 0 degenerate
+
+
+import igl
+import numpy as np
+import trimesh
+
+def repair_mesh(V, F, area_eps=1e-6, merge_eps=1e-12, keep_largest=True):
+    # -------------------
+    # 1. Remove degenerate faces
+    v0, v1, v2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    areas = 0.5 *np.cross(v1 - v0, v2 - v0)
+    if areas.max()<0:
+        areas=-areas
+    mask = areas > area_eps
+    F = F[mask]
+
+    # -------------------
+    # 2. Merge duplicate vertices
+    # V,F,*rest= igl.remove_duplicates(V,F, 1e-7)
+
+    # -------------------
+    # 3. Remove unreferenced vertices
+    V, F, *rest = igl.remove_unreferenced(V, F)
+
+    # -------------------
+    # 4. Remove small disconnected components
+    # if keep_largest:
+    #     C = igl.connected_components(F)[0]
+    #     largest_comp = np.argmax(np.bincount(C))
+    #     mask = C == largest_comp
+    #     F = F[mask]
+    #     V, F, *rest = igl.remove_unreferenced(V, F)
+
+    # -------------------
+    # 5. Fix orientation & normals (trimesh)
+    # mesh = trimesh.Trimesh(vertices=V, faces=F, process=False)
+    # mesh.remove_degenerate_faces()
+    # mesh.remove_duplicate_faces()
+    # mesh.remove_infinite_values()
+    # mesh.remove_unreferenced_vertices()
+
+    # # Make normals consistent & outward
+    # mesh.fix_normals()
+
+    # return np.array(mesh.vertices), np.array(mesh.faces)
+    return V, F
+
+# Example usage:
+# V_clean, F_clean = repair_mesh(V_remesh, F_remesh)
+
+
+def barycentric_remesh_optimization(vertices,faces,boundary_indices,use_triangle,use_gpytoolbox):
+    """
     Complete remesh optimization using barycentric weight recomputation  
       
     Args:  
@@ -394,28 +480,62 @@ def barycentric_remesh_optimization(vertices,faces,boundary_indices):
         new_constraint_data: Rebuilt constraint system  
     """  
     #get triangle areas
-    max_area = compute_average_area(vertices, faces)
-    print(f"Triangle area - Max: {max_area}")  
+    # max_area = compute_average_area(vertices, faces)
+    # print(f"Triangle area - Max: {max_area}")  
     
-    # Convert to boundary segments (pairs of vertex indices)
-    segments = np.column_stack([boundary_indices, np.roll(boundary_indices, -1)])
+    if use_triangle:
+        # Convert to boundary segments (pairs of vertex indices)
+        segments = np.column_stack([boundary_indices, np.roll(boundary_indices, -1)])
 
-    # Step 4: Build triangle input
-    A = {
-        'vertices': vertices,
-        'segments': segments,
-    }
+        # Step 4: Build triangle input
+        A = {
+            'vertices': vertices,
+            'segments': segments,
+        }
 
-    # Step 5: Call triangle to triangulate the polygon
-    # B = triangle.triangulate(A, f'pqY')  # 'p' = PSLG (respect segments)
-    B = triangle.triangulate(A, f'p')  # 'p' = PSLG (respect segments)
-    # Extract vertices and faces
-    new_vertices = B['vertices']
-    new_faces = B['triangles']
-    # triangle.compare(plt, A, B)
-    # plt.show()
+        # Step 5: Call triangle to triangulate the polygon
+        # B = triangle.triangulate(A, f'pqY')  # 'p' = PSLG (respect segments)
+        B = triangle.triangulate(A, f'p')  # 'p' = PSLG (respect segments)
+        # Extract vertices and faces
+        new_vertices = B['vertices']
+        new_faces = B['triangles']
+    elif use_gpytoolbox:
+        vertices_3d=np.hstack([vertices, np.zeros((vertices.shape[0], 1))])
 
-    # check_triangle_orientation(new_vertices, new_faces)
+        #get max edge length from surface
+        max_edge_length = get_max_edge_length(vertices, faces) 
+
+        new_vertices_3d, new_faces = gpytoolbox.remesh_botsch(vertices_3d, faces, 20, max_edge_length*5, True)
+        new_vertices=new_vertices_3d[:,:2]
+        new_vertices=new_vertices.astype(np.float32)
+        new_faces=new_faces.astype(np.int64)
+        new_vertices=np.ascontiguousarray(new_vertices)
+        new_faces=np.ascontiguousarray(new_faces)
+
+    # print(new_vertices.flags['C_CONTIGUOUS'])  # True
+    # print(new_vertices.flags['F_CONTIGUOUS'])  # False
+    # print(new_faces.flags['C_CONTIGUOUS'])  # True
+    # print(new_faces.flags['F_CONTIGUOUS'])  # False
+
+    # new_vertices,new_faces=repair_mesh(new_vertices, new_faces)
+
+    view_mesh = False
+    if view_mesh:
+        old_mesh= {
+            'vertices': vertices,
+            'triangles': faces
+        }
+
+        B={
+            'vertices': new_vertices,
+            'triangles': new_faces
+        }
+        triangle.compare(plt, old_mesh, B)
+        plt.show()
+
+    # # check_triangle_orientation(new_vertices, new_faces)
+    # orientation = triangle_orientation_2d(new_vertices, new_faces)
+
 
     L = igl.cotmatrix(new_vertices, new_faces)
 

@@ -520,19 +520,21 @@ class Escher:
                 # ======Solve linear solve ==========================================================
                 mapped, _, success = self.solver.solve(w_solver_input)
                 # Barycentric remesh check every 2 iterations
-                if iter % 100 == 0 and iter > 0:
+                if iter % 200 == 0 and iter > 0:
                     vertices_np = mapped.detach().cpu().numpy()
                     faces_np = self.faces.cpu().numpy()
 
                     # comprehensive distortion check
                     distortion_score = compute_comprehensive_distortion(vertices_np, faces_np,self.initial_vertices)
                     
-                    if distortion_score > 0.1:  
+                    if distortion_score > 0.3:  
                         print(f"High distortion detected: {distortion_score:.3f}, triggering barycentric remesh")  
 
                         # Complete barycentric remesh
+                        use_triangle=True
+                        use_gpytoolbox=not use_triangle
                         new_vertices, new_faces, new_weights = barycentric_remesh_optimization(
-                                vertices_np,faces_np, self.bdry
+                                vertices_np,faces_np, self.bdry, use_triangle, use_gpytoolbox
                             )
 
 
