@@ -527,7 +527,7 @@ class Escher:
                     # comprehensive distortion check
                     distortion_score = compute_comprehensive_distortion(vertices_np, faces_np,self.initial_vertices)
                     
-                    if distortion_score > 0.3:  
+                    if distortion_score > 0.5:  
                         print(f"High distortion detected: {distortion_score:.3f}, triggering barycentric remesh")  
 
                         # Complete barycentric remesh
@@ -562,6 +562,7 @@ class Escher:
                             W_tensor = torch.tensor(new_weights, dtype=torch.float32).unsqueeze(1)
                             self.W = torch.nn.Parameter(W_tensor)
                             self.init_optimizer(remaining_steps=self.args.N_STEPS - iter)
+                            self.init_loss()
 
                             
                             print(f"Remesh completed: {len(new_vertices)} vertices, {len(new_faces)} faces")
