@@ -1,3 +1,4 @@
+import scipy.sparse as sp
 import igl
 import matplotlib.pyplot as plt
 from scipy.spatial.distance import pdist  
@@ -6,6 +7,13 @@ import numpy as np
 import triangle 
 from escher.geometry.sanity_checks import check_triangle_orientation
 import gpytoolbox
+import enum
+
+class RemeshMethod(enum.Enum):
+    TRIANGLE = 1
+    GPYTOOLBOX = 2
+    SimpleLaplacianSmooth = 3
+
 def compute_comprehensive_distortion(vertices, faces, reference_vertices=None):  
     """  
     Compute comprehensive mesh quality metrics for distortion detection  
@@ -140,124 +148,6 @@ def compute_comprehensive_distortion(vertices, faces, reference_vertices=None):
 
 
 
-def split_boundary_equal_length(V, F):
-
-    boundary = igl.boundary_loop(F)
-    loop = V[boundary]
-
-    edges = loop[np.roll(np.arange(len(loop)), -1)] - loop
-    lengths = np.linalg.norm(edges, axis=1)
-    cumlen = np.cumsum(lengths)
-    total_len = cumlen[-1]
-    segment_len = total_len / 4
-
-    split_indices = [np.searchsorted(cumlen, segment_len * i) for i in range(1, 4)]
-    indices = [0] + split_indices + [len(loop)]
-
-    sides = [loop[indices[i]:indices[i + 1]] for i in range(4)]
-    return sides, boundary
-
-def split_boundary_by_angle(V, F):
-
-    """
-    Splits the boundary of a 2D triangle mesh into four segments based on corner angles.
-
-    This function uses the boundary vertex sequence of a 2D mesh and identifies the 
-    four sharpest turning points (based on angle between adjacent edges). It then splits 
-    the boundary at those four corner points to yield four approximately "sided" segments.
-
-    Parameters:
-    -----------
-    V : (n, 2) ndarray
-        2D coordinates of the mesh vertices.
-    F : (m, 3) ndarray
-        Triangular face indices.
-
-    Returns:
-    --------
-    sides : list of (k_i, 2) ndarrays
-        A list of 4 boundary segments (each as an ordered array of 2D points).
-    boundary : (k,) ndarray
-        The ordered boundary loop as vertex indices into V.
-    """
-    boundary = igl.boundary_loop(F)
-    loop = V[boundary]
-
-    prev = np.roll(loop, 1, axis=0)
-    next = np.roll(loop, -1, axis=0)
-    v1 = loop - prev
-    v2 = next - loop
-
-    v1 /= np.linalg.norm(v1, axis=1, keepdims=True)
-    v2 /= np.linalg.norm(v2, axis=1, keepdims=True)
-    dot = np.einsum('ij,ij->i', v1, v2)
-    dot = np.clip(dot, -1.0, 1.0)
-    angles = np.arccos(dot)
-
-    corner_idx = np.argsort(-angles)[:4]
-    corner_idx = np.sort(corner_idx)
-    wrapped = list(corner_idx) + [corner_idx[0] + len(loop)]
-
-    sides = []
-    for i in range(4):
-        start = wrapped[i] % len(loop)
-        end = wrapped[i + 1] % len(loop)
-        if start < end:
-            sides.append(loop[start:end])
-        else:
-            sides.append(np.vstack([loop[start:], loop[:end]]))
-    return sides, boundary
-
-
-def split_boundary_by_curvature(V, F):
-
-    """
-    Splits the boundary of a 2D triangle mesh into four segments using discrete curvature.
-
-    This function uses principal curvature estimates from the mesh to identify
-    high-curvature boundary points (typically sharp corners). It selects the 
-    top four points with highest curvature magnitude on the boundary, and splits 
-    the loop into four segments at those points.
-
-    Parameters:
-    -----------
-    V : (n, 2 or 3) ndarray
-        Coordinates of the mesh vertices (2D or 3D).
-    F : (m, 3) ndarray
-        Triangular face indices.
-
-    Returns:
-    --------
-    sides : list of (k_i, d) ndarrays
-        A list of 4 boundary segments (each as an ordered array of dD points).
-    boundary : (k,) ndarray
-        The ordered boundary loop as vertex indices into V.
-    """
-    boundary = igl.boundary_loop(F)
-    loop_idx = boundary
-    loop = V[loop_idx]
-
-    # Estimate curvature (this uses all vertices, not just the boundary)
-    PD1, PD2, PV1, PV2 = igl.principal_curvature(V, F)
-
-    # Use max abs curvature along boundary vertices
-    max_curvature = np.maximum(np.abs(PV1), np.abs(PV2))
-    boundary_curvature = max_curvature[loop_idx]
-
-    # Get top 4 points with highest curvature magnitude
-    corner_idx = np.argsort(-boundary_curvature)[:4]
-    corner_idx = np.sort(corner_idx)
-    wrapped = list(corner_idx) + [corner_idx[0] + len(loop)]
-
-    sides = []
-    for i in range(4):
-        start = wrapped[i] % len(loop)
-        end = wrapped[i + 1] % len(loop)
-        if start < end:
-            sides.append(loop[start:end])
-        else:
-            sides.append(np.vstack([loop[start:], loop[:end]]))
-    return sides
 
 def split_boundary_by_discrete_2d_curvature(V, F):
     """
@@ -287,26 +177,6 @@ def split_boundary_by_discrete_2d_curvature(V, F):
         raise RuntimeError(f"Warning: Boundary length is {len(boundary)}, expected 196. This may affect segmentation.")
     loop = V[boundary]
 
-    # Step 2: Compute turning angles (discrete curvature)
-    # prev = np.roll(loop, 1, axis=0)
-    # next = np.roll(loop, -1, axis=0)
-    # v1 = loop - prev
-    # v2 = next - loop
-
-    # # Normalize edge vectors
-    # v1 /= np.linalg.norm(v1, axis=1, keepdims=True)
-    # v2 /= np.linalg.norm(v2, axis=1, keepdims=True)
-
-    # # Compute angle between edges
-    # dot = np.einsum('ij,ij->i', v1, v2)
-    # dot = np.clip(dot, -1.0, 1.0)
-    # angles = np.arccos(dot)  # Radians, max ~ π
-
-    # # Sharpest 4 turning points
-    # corner_idx = np.argsort(-angles)[:4]
-    #corner_idx = np.sort(corner_idx)
-
-    # wrapped = list(corner_idx) + [corner_idx[0] + len(loop)]
     wrapped=[0,49,98,147,196]  # Assuming these are the indices of the corners in the boundary loop
 
     # Step 4: Split into segments and compute centroids
@@ -358,8 +228,6 @@ def split_boundary_by_discrete_2d_curvature(V, F):
     return sides_dict
 
 
-import numpy as np
-
 def get_max_edge_length(V, F):
     # Extract the vertex coordinates of each triangle
     v0 = V[F[:, 0]]
@@ -373,12 +241,6 @@ def get_max_edge_length(V, F):
     
     # Return the maximum
     return np.max([e0.max(), e1.max(), e2.max()])
-
-# # Example
-# V = np.array([[0, 0], [1, 0], [0, 1]])
-# F = np.array([[0, 1, 2]])
-# print(max_edge_length(V, F))  # 1.414...
-
 
 def plot_sides(sides,vertices):
     import matplotlib.pyplot as plt
@@ -399,7 +261,6 @@ def compute_average_area(V, F):
     return np.max(areas)
 
 
-import numpy as np
 
 def triangle_orientation_2d(V, F):
     v0 = V[F[:, 0]]
@@ -413,56 +274,82 @@ def triangle_orientation_2d(V, F):
     return np.sign(signed_area2)  # +1 CCW, -1 CW, 0 degenerate
 
 
-import igl
-import numpy as np
-import trimesh
 
-def repair_mesh(V, F, area_eps=1e-6, merge_eps=1e-12, keep_largest=True):
-    # -------------------
-    # 1. Remove degenerate faces
-    v0, v1, v2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
-    areas = 0.5 *np.cross(v1 - v0, v2 - v0)
-    if areas.max()<0:
-        areas=-areas
-    mask = areas > area_eps
-    F = F[mask]
+# def repair_mesh(V, F, area_eps=1e-6, merge_eps=1e-12, keep_largest=True):
+#     # -------------------
+#     # 1. Remove degenerate faces
+#     v0, v1, v2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+#     areas = 0.5 *np.cross(v1 - v0, v2 - v0)
+#     if areas.max()<0:
+#         areas=-areas
+#     mask = areas > area_eps
+#     F = F[mask]
 
-    # -------------------
-    # 2. Merge duplicate vertices
-    # V,F,*rest= igl.remove_duplicates(V,F, 1e-7)
+#     # -------------------
+#     # 2. Merge duplicate vertices
+#     # V,F,*rest= igl.remove_duplicates(V,F, 1e-7)
 
-    # -------------------
-    # 3. Remove unreferenced vertices
-    V, F, *rest = igl.remove_unreferenced(V, F)
+#     # -------------------
+#     # 3. Remove unreferenced vertices
+#     V, F, *rest = igl.remove_unreferenced(V, F)
 
-    # -------------------
-    # 4. Remove small disconnected components
-    # if keep_largest:
-    #     C = igl.connected_components(F)[0]
-    #     largest_comp = np.argmax(np.bincount(C))
-    #     mask = C == largest_comp
-    #     F = F[mask]
-    #     V, F, *rest = igl.remove_unreferenced(V, F)
+#     # -------------------
+#     # 4. Remove small disconnected components
+#     # if keep_largest:
+#     #     C = igl.connected_components(F)[0]
+#     #     largest_comp = np.argmax(np.bincount(C))
+#     #     mask = C == largest_comp
+#     #     F = F[mask]
+#     #     V, F, *rest = igl.remove_unreferenced(V, F)
 
-    # -------------------
-    # 5. Fix orientation & normals (trimesh)
-    # mesh = trimesh.Trimesh(vertices=V, faces=F, process=False)
-    # mesh.remove_degenerate_faces()
-    # mesh.remove_duplicate_faces()
-    # mesh.remove_infinite_values()
-    # mesh.remove_unreferenced_vertices()
+#     # -------------------
+#     # 5. Fix orientation & normals (trimesh)
+#     # mesh = trimesh.Trimesh(vertices=V, faces=F, process=False)
+#     # mesh.remove_degenerate_faces()
+#     # mesh.remove_duplicate_faces()
+#     # mesh.remove_infinite_values()
+#     # mesh.remove_unreferenced_vertices()
 
-    # # Make normals consistent & outward
-    # mesh.fix_normals()
+#     # # Make normals consistent & outward
+#     # mesh.fix_normals()
 
-    # return np.array(mesh.vertices), np.array(mesh.faces)
-    return V, F
-
-# Example usage:
-# V_clean, F_clean = repair_mesh(V_remesh, F_remesh)
+#     # return np.array(mesh.vertices), np.array(mesh.faces)
+#     return V, F
 
 
-def barycentric_remesh_optimization(vertices,faces,boundary_indices,use_triangle,use_gpytoolbox):
+def laplacian_smooth_manual(V, F, iterations=10, lam=0.5, fixed_boundary=True):
+    """
+    Laplacian smoothing using igl.adjacency_list for neighbor finding.
+    """
+    V_smooth = V.copy()
+    n_vertices = V.shape[0]
+
+    # Get adjacency list from libigl
+    adjacency = igl.adjacency_list(F)  # list of lists
+
+    # Detect boundary vertices if needed
+    boundary_mask = np.zeros(n_vertices, dtype=bool)
+    if fixed_boundary:
+        boundary_vertices = igl.boundary_loop(F)
+        boundary_mask[boundary_vertices] = True
+
+    # Iterative smoothing
+    for _ in range(iterations):
+        new_positions = V_smooth.copy()
+        for i in range(n_vertices):
+            if fixed_boundary and boundary_mask[i]:
+                continue
+            if len(adjacency[i]) == 0:
+                continue
+            avg_neighbor = np.mean(V_smooth[adjacency[i]], axis=0)
+            new_positions[i] = (1 - lam) * V_smooth[i] + lam * avg_neighbor
+        V_smooth = new_positions
+
+    return V_smooth
+
+
+
+def barycentric_remesh_optimization(vertices,faces,boundary_indices,remesh_method:RemeshMethod=RemeshMethod.TRIANGLE, use_triangle=True, use_gpytoolbox=False):
     """
     Complete remesh optimization using barycentric weight recomputation  
       
@@ -483,7 +370,7 @@ def barycentric_remesh_optimization(vertices,faces,boundary_indices,use_triangle
     # max_area = compute_average_area(vertices, faces)
     # print(f"Triangle area - Max: {max_area}")  
     
-    if use_triangle:
+    if remesh_method == RemeshMethod.TRIANGLE:
         # Convert to boundary segments (pairs of vertex indices)
         segments = np.column_stack([boundary_indices, np.roll(boundary_indices, -1)])
 
@@ -499,18 +386,21 @@ def barycentric_remesh_optimization(vertices,faces,boundary_indices,use_triangle
         # Extract vertices and faces
         new_vertices = B['vertices']
         new_faces = B['triangles']
-    elif use_gpytoolbox:
+    elif remesh_method == RemeshMethod.GPYTOOLBOX:
         vertices_3d=np.hstack([vertices, np.zeros((vertices.shape[0], 1))])
 
         #get max edge length from surface
         max_edge_length = get_max_edge_length(vertices, faces) 
 
-        new_vertices_3d, new_faces = gpytoolbox.remesh_botsch(vertices_3d, faces, 20, max_edge_length*5, True)
+        new_vertices_3d, new_faces = gpytoolbox.remesh_botsch(vertices_3d, faces, 20, max_edge_length, False)
         new_vertices=new_vertices_3d[:,:2]
         new_vertices=new_vertices.astype(np.float32)
         new_faces=new_faces.astype(np.int64)
         new_vertices=np.ascontiguousarray(new_vertices)
         new_faces=np.ascontiguousarray(new_faces)
+    elif remesh_method == RemeshMethod.SimpleLaplacianSmooth:
+        new_vertices = laplacian_smooth_manual(vertices, faces, lam=0.5, iterations=10)
+        new_faces = faces
 
     # print(new_vertices.flags['C_CONTIGUOUS'])  # True
     # print(new_vertices.flags['F_CONTIGUOUS'])  # False
@@ -519,7 +409,7 @@ def barycentric_remesh_optimization(vertices,faces,boundary_indices,use_triangle
 
     # new_vertices,new_faces=repair_mesh(new_vertices, new_faces)
 
-    view_mesh = False
+    view_mesh = True
     if view_mesh:
         old_mesh= {
             'vertices': vertices,

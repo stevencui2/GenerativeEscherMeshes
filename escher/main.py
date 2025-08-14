@@ -59,7 +59,7 @@ from escher.geometry.remesh import (
     compute_comprehensive_distortion,
     barycentric_remesh_optimization,
     split_boundary_by_discrete_2d_curvature,
-    plot_sides
+    RemeshMethod
 )
 
 start_time = time.time()
@@ -491,6 +491,7 @@ class Escher:
         pbar = tqdm(total=self.args.N_STEPS, desc="steps", position=0)
 
         # ================== Main training loop ===========================
+        is_remeshed= False
         for iter in range(self.args.N_STEPS):
             if iter == self.args.ONLY_TEXTURE_FROM_THIS_POINT:
                 self.optimizer = torch.optim.Adam(
@@ -519,22 +520,22 @@ class Escher:
 
                 # ======Solve linear solve ==========================================================
                 mapped, _, success = self.solver.solve(w_solver_input)
-                # Barycentric remesh check every 2 iterations
-                if iter % 200 == 0 and iter > 0:
+                # Barycentric remesh check every 2000 iterations
+                if iter % 2000 == 0 and iter > 0 and not is_remeshed:
                     vertices_np = mapped.detach().cpu().numpy()
                     faces_np = self.faces.cpu().numpy()
 
                     # comprehensive distortion check
                     distortion_score = compute_comprehensive_distortion(vertices_np, faces_np,self.initial_vertices)
                     
-                    if distortion_score > 0.5:  
+                    if distortion_score > 0.35:  
                         print(f"High distortion detected: {distortion_score:.3f}, triggering barycentric remesh")  
 
                         # Complete barycentric remesh
-                        use_triangle=True
-                        use_gpytoolbox=not use_triangle
+                        
+                        remesh_method = RemeshMethod.SimpleLaplacianSmooth
                         new_vertices, new_faces, new_weights = barycentric_remesh_optimization(
-                                vertices_np,faces_np, self.bdry, use_triangle, use_gpytoolbox
+                                vertices_np,faces_np, self.bdry, remesh_method
                             )
 
 
@@ -550,25 +551,26 @@ class Escher:
                             sides=split_boundary_by_discrete_2d_curvature(new_vertices, new_faces)
 
 
-                            # plot_sides(sides,new_vertices)
+                        # plot_sides(sides,new_vertices)
 
-                            # Update the solver with the new vertices and edge pairs
-                            #for now only consider one number of label, thus face_split= [new_faces]
-                            init_weights=False
-                            self.init_mesh_solver_parameters(
-                                new_vertices, new_faces, [new_faces] ,init_weights,sides
-                            )
-                            # Update the weight parameter for next iterations  
-                            W_tensor = torch.tensor(new_weights, dtype=torch.float32).unsqueeze(1)
-                            self.W = torch.nn.Parameter(W_tensor)
-                            self.init_optimizer(remaining_steps=self.args.N_STEPS - iter)
-                            self.init_loss()
+                        # Update the solver with the new vertices and edge pairs
+                        #for now only consider one number of label, thus face_split= [new_faces]
+                        init_weights=False
+                        self.init_mesh_solver_parameters(
+                            new_vertices, new_faces, [new_faces] ,init_weights,sides
+                        )
+                        # Update the weight parameter for next iterations  
+                        W_tensor = torch.tensor(new_weights, dtype=torch.float32).unsqueeze(1)
+                        self.W = torch.nn.Parameter(W_tensor)
+                        self.init_optimizer(remaining_steps=self.args.N_STEPS - iter)
+                        self.init_loss()
 
-                            
-                            print(f"Remesh completed: {len(new_vertices)} vertices, {len(new_faces)} faces")
+                        
+                        print(f"Remesh completed: {len(new_vertices)} vertices, {len(new_faces)} faces")
 
-                            #update the mapped vertices
-                            mapped = torch.from_numpy(new_vertices)
+                        #update the mapped vertices
+                        mapped = torch.from_numpy(new_vertices)
+                        is_remeshed = True
                             
                 if not success:
                     # pickle everything i need to reproduce
