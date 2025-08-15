@@ -3,7 +3,7 @@ trimesh
 libigl
 matplotlib
 pybind11
-torch_sparse_solve
+#torch_sparse_solve
 tqdm
 omegaconf
 ninja
@@ -17,3 +17,4 @@ jaxtyping
 html4vision
 netvision
 kornia
+triangle

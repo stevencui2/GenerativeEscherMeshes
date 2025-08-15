@@ -7,7 +7,8 @@ OUTPUT_DIR : "output"
 SEED : 62389572394075
 USE_INTENSITY : False  # if True, will not use RGB but just blend between one color (Blue) and white. to avoid black pixels.
 ### prompts
-PROMPT : "A professional cartoon of nerdy bear, a masterpiece"
+# PROMPT : "A professional cartoon of nerdy bear, a masterpiece"
+PROMPT : "A detailed mechanical gear with sharp teeth, a masterpiece"
   # - "a masterpiece, a beautiful illustration of a tree, a masterpiece"
   # - "A beautiful illustration of a man doing yoga in a tree pose"
   # - "a masterpiece, a beautiful illustration of a tree, a masterpiece"

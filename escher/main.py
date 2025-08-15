@@ -55,6 +55,12 @@ from escher.OTE.tilings import (
 )
 from escher.misc.misc import get_cosine_schedule_with_warmup, get_linear_schedule_with_warmup, seed_everything
 from escher.OTE.core import GlobalDeformation
+from escher.geometry.remesh import (
+    compute_comprehensive_distortion,
+    barycentric_remesh_optimization,
+    split_boundary_by_discrete_2d_curvature,
+    RemeshMethod
+)
 
 start_time = time.time()
 
@@ -275,6 +281,61 @@ class Escher:
             )
             print("You provided : ", self.args.TILING_TYPE)
             raise Exception("unknown tiling type")
+    def get_edge_pairs(self, faces_npy):
+        """Generate nx2 list of edge pairs (i,j) from faces_npy"""
+        adjacency_list = igl.adjacency_list(faces_npy)
+        edge_pairs = []
+        for r, i in zip(adjacency_list, range(len(adjacency_list))):
+            for j in r:
+                if i < j:
+                    edge_pairs.append((i, j))
+        edge_pairs = np.asarray(edge_pairs)
+        return edge_pairs
+
+    def init_mesh_solver_parameters(self,points, faces_npy, faces_split,init_weight,sides=None):
+                # =========== init uv ==================================================
+        normalized_points = points
+        normalized_points = normalized_points - normalized_points.min()
+        uv = normalized_points / normalized_points.max() # [0,1]
+        uv = torch.from_numpy(uv).unsqueeze(0).to(self.device)
+        normalized_points = 2 * normalized_points / normalized_points.max() - 1 # [-1,1]
+
+        # tri = Delaunay(points)
+        faces = torch.from_numpy(faces_npy)
+
+        # bdry indices of mesh
+        bdry = igl.boundary_loop(faces_npy)
+
+        edge_pairs= self.get_edge_pairs(faces_npy)
+
+        constraint_data = self.constraints_from_args(points, sides)
+
+        # the solver itself
+        solver = OTESolver.OTESolver(edge_pairs, points, constraint_data)
+        W = torch.nn.Parameter(torch.randn((edge_pairs.shape[0], 1)))
+        self.faces_split = [
+            torch.from_numpy(faces_split_).to(self.device).type(torch.int32) for faces_split_ in faces_split
+        ]
+
+        self.points = points
+        if init_weight:
+            # Store initial vertices for remesh optimization  
+            self.initial_vertices = points.copy()  # Add this line 
+        self.uv = uv
+        self.bdry = bdry
+        self.faces = faces
+        self.faces_npy = faces_npy
+        self.constraint_data = constraint_data
+        # self.ROTATION_MATRIX = ROTATION_MATRIX
+        self.global_map = GlobalDeformation.GlobalDeformation(
+            constraint_data.get_horizontal_symmetry_orientation(), device=self.device
+        )
+        # self.global_map.to(self.device)
+        self.solver = solver
+        if init_weight:
+            self.W = W
+        self.sides = sides
+        self.edge_pairs = edge_pairs
 
     def init_mesh_and_solver(self):
         # ============== generate a 2D mesh of a square =======================
@@ -291,60 +352,18 @@ class Escher:
             assert len(self.args.PROMPT) == 1, "Hexagon experiment only works with one prompt"
             points, faces_npy, sides = get_hexagonal_mesh(vertices_per_edge = self.args.MESH_RESOLUTION)
             faces_split = [faces_npy]
+        else:
+            # bdry indices of mesh
+            bdry = igl.boundary_loop(faces_npy)
 
-        # =========== init uv ==================================================
-        normalized_points = points
-        normalized_points = normalized_points - normalized_points.min()
-        uv = normalized_points / normalized_points.max() # [0,1]
-        uv = torch.from_numpy(uv).unsqueeze(0).to(self.device)
-        normalized_points = 2 * normalized_points / normalized_points.max() - 1 # [-1,1]
-
-        # tri = Delaunay(points)
-        faces = torch.from_numpy(faces_npy)
-
-        # bdry indices of mesh
-        bdry = igl.boundary_loop(faces_npy)
-
-        # split the bdry into 4 sides (left,right,top,down)
-        if not ("Hexagon" in self.args.TILING_TYPE):
+            # split the bdry into 4 sides (left,right,top,down)
             sides = split_square_boundary.split_square_boundary(points, bdry)
+        
+        init_weight:bool= True
+        self.init_mesh_solver_parameters(points, faces_npy, faces_split, init_weight, sides)
 
-        # generate nx2 list of edge pairs (i,j)
-        adjacency_list = igl.adjacency_list(faces_npy)  # list of lists containing at index i the adjacent vertices of vertex i
 
-        edge_pairs = []
-        for r, i in zip(adjacency_list, range(len(adjacency_list))):
-            for j in r:
-                if i < j:
-                    edge_pairs.append((i, j))
-        edge_pairs = np.asarray(edge_pairs)
-
-        constraint_data = self.constraints_from_args(points, sides)
-
-        # the solver itself
-        solver = OTESolver.OTESolver(edge_pairs, points, constraint_data)
-        W = torch.nn.Parameter(torch.randn((edge_pairs.shape[0], 1)))
-        self.faces_split = [
-            torch.from_numpy(faces_split_).to(self.device).type(torch.int32) for faces_split_ in faces_split
-        ]
-
-        self.points = points
-        self.uv = uv
-        self.bdry = bdry
-        self.faces = faces
-        self.faces_npy = faces_npy
-        self.constraint_data = constraint_data
-        # self.ROTATION_MATRIX = ROTATION_MATRIX
-        self.global_map = GlobalDeformation.GlobalDeformation(
-            constraint_data.get_horizontal_symmetry_orientation(), device=self.device
-        )
-        # self.global_map.to(self.device)
-        self.solver = solver
-        self.W = W
-        self.sides = sides
-        self.edge_pairs = edge_pairs
-
-    def init_optimizer(self):
+    def init_optimizer(self,remaining_steps=None):
         # ================== Init Texture ===========================
         texture = None
         self.num_channels = 3
@@ -379,7 +398,7 @@ class Escher:
                 ],
                 lr=self.args.LR,
             )
-            self.init_scheduler()
+            self.init_scheduler(remaining_steps)
 
     def init_scheduler(self, remaining_steps=None):
         if remaining_steps is None:
@@ -472,6 +491,7 @@ class Escher:
         pbar = tqdm(total=self.args.N_STEPS, desc="steps", position=0)
 
         # ================== Main training loop ===========================
+        is_remeshed= False
         for iter in range(self.args.N_STEPS):
             if iter == self.args.ONLY_TEXTURE_FROM_THIS_POINT:
                 self.optimizer = torch.optim.Adam(
@@ -500,6 +520,58 @@ class Escher:
 
                 # ======Solve linear solve ==========================================================
                 mapped, _, success = self.solver.solve(w_solver_input)
+                # Barycentric remesh check every 2000 iterations
+                if iter % 2000 == 0 and iter > 0 and not is_remeshed:
+                    vertices_np = mapped.detach().cpu().numpy()
+                    faces_np = self.faces.cpu().numpy()
+
+                    # comprehensive distortion check
+                    distortion_score = compute_comprehensive_distortion(vertices_np, faces_np,self.initial_vertices)
+                    
+                    if distortion_score > 0.35:  
+                        print(f"High distortion detected: {distortion_score:.3f}, triggering barycentric remesh")  
+
+                        # Complete barycentric remesh
+                        
+                        remesh_method = RemeshMethod.SimpleLaplacianSmooth
+                        new_vertices, new_faces, new_weights = barycentric_remesh_optimization(
+                                vertices_np,faces_np, self.bdry, remesh_method
+                            )
+
+
+                        if "Hexagon" in self.args.TILING_TYPE:
+                            sides= None
+                            raise NotImplementedError("Hexagonal remeshing not implemented yet")
+                        else:
+                            # bdry indices of mesh
+                            # bdry = igl.boundary_loop(new_faces)
+
+                            # split the bdry into 4 sides (left,right,top,down)
+                            # sides = split_square_boundary.split_square_boundary(new_vertices, bdry)
+                            sides=split_boundary_by_discrete_2d_curvature(new_vertices, new_faces)
+
+
+                        # plot_sides(sides,new_vertices)
+
+                        # Update the solver with the new vertices and edge pairs
+                        #for now only consider one number of label, thus face_split= [new_faces]
+                        init_weights=False
+                        self.init_mesh_solver_parameters(
+                            new_vertices, new_faces, [new_faces] ,init_weights,sides
+                        )
+                        # Update the weight parameter for next iterations  
+                        W_tensor = torch.tensor(new_weights, dtype=torch.float32).unsqueeze(1)
+                        self.W = torch.nn.Parameter(W_tensor)
+                        self.init_optimizer(remaining_steps=self.args.N_STEPS - iter)
+                        self.init_loss()
+
+                        
+                        print(f"Remesh completed: {len(new_vertices)} vertices, {len(new_faces)} faces")
+
+                        #update the mapped vertices
+                        mapped = torch.from_numpy(new_vertices)
+                        is_remeshed = True
+                            
                 if not success:
                     # pickle everything i need to reproduce
                     os.makedirs(os.path.join(self.args.OUTPUT_DIR, "failure"), exist_ok=True)
